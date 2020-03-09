@@ -42,6 +42,13 @@ namespace Plugins.ScriptableVariables.Editor.Utils {
             FindObjectReferencesAsync();
         }
         
+        public void TryStopSearch()
+        {
+            if (repaint == null || repaint.GetInvocationList().Length == 0) {
+                StopSearch();
+            }
+        }
+        
         public void StopSearch()
         {
             if (asyncSearchSubscribed) {
@@ -128,7 +135,7 @@ namespace Plugins.ScriptableVariables.Editor.Utils {
         }
 
         private bool FrameTimeElapsed()
-        {           
+        {
             if (stopwatch.Elapsed.TotalSeconds <= FrameTime) {
                 return false;
             }
