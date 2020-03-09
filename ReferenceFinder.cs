@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -5,24 +6,26 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
+using Object = UnityEngine.Object;
 
-namespace Plugins.ScriptableVariables.Editor {
-    public class ReferenceFinder : EditorWindow
+namespace Plugins.ScriptableVariables.Editor.Utils {
+    public class ReferenceFinder
     {
-        private Vector2 scrollViewPosition = Vector2.zero;
+        public List<GameObject> PrefabReferences { get; private set; }
+        public List<ScriptableObject> ScriptableObjectReferences  { get; private set; }
+        public List<MonoBehaviour> SceneReferences { get; private set; }
 
-        private readonly List<GameObject> prefabReferences = new List<GameObject>();
-        private readonly List<ScriptableObject> scriptableObjectReferences = new List<ScriptableObject>();
-        private readonly List<MonoBehaviour> sceneReferences = new List<MonoBehaviour>();
+        public Object[] ToFindObjects { get; private set; }
+        public Action repaint;
+
+        public bool Searching => asyncSearchSubscribed;
+        public float SearchProgress { get; private set; }
+        public string SearchDescription => assetsSearched ? "Finding Scene References..." : "Finding Asset References...";
     
         private List<string> paths;
         private Object[] sceneObjects;
 
-
-        private Object[] toFindObjects;
-        private Object[] toFindObjectsAfterLayout;
-
-        private bool subscribedToUpdate;
+        private bool asyncSearchSubscribed;
         private const float FrameTime = 0.05f;
         private readonly Stopwatch stopwatch = new Stopwatch();
 
@@ -30,150 +33,25 @@ namespace Plugins.ScriptableVariables.Editor {
         private int innerSearchIndex;
         private bool assetsSearched;
 
-        private string progressBarText;
-        private float progressBarFill;
-    
-        [MenuItem("Assets/Find References", false, 39)]
-        private static void FindSelectedAssetReferences()
+
+        public void FindObjectReferences(Object[] objects)
         {
-            if( Selection.objects.Length > 1) {
-                FindObjectReferences(Selection.objects);
-            
-            } else {
-                FindObjectReferences(Selection.activeObject);
-            }
-        }
+            ToFindObjects = objects;
 
-        public static void FindObjectReferences(Object asset)
-        {
-            FindObjectReferences(new[] {asset});
-        }
-    
-        public static void FindObjectReferences(Object[] assets)
-        {
-            ReferenceFinder window = GetWindow<ReferenceFinder>(true, "Find References", true);
-            window.position = new Rect(new Vector2(200, 200), new Vector2(300, 350));
-            window.toFindObjects = assets;
-            window.FindObjectReferences();
-        }
-
-        #region EditorWindow
-    
-        private void OnGUI()
-        {
-            GUILayout.Space(5);
-            scrollViewPosition = EditorGUILayout.BeginScrollView(scrollViewPosition);
-
-            if (toFindObjects != null)
-            {
-                GUILayout.BeginHorizontal();
-                if (toFindObjects.Length == 1)
-                {
-                    DrawLayoutObjectButton(toFindObjects[0]);
-                    GUILayout.Label($" is referenced by...");
-                }
-                else
-                {
-                    GUILayout.Label($"{toFindObjects.Length} items");
-                    if (GUILayout.Button("\u25B6", EditorStyles.miniButtonRight, GUILayout.MaxWidth(20)))
-                    {
-                        toFindObjectsAfterLayout = toFindObjects;
-                    }
-                    GUILayout.Label($"are referenced by...");
-                }
-                GUILayout.EndHorizontal();
-            }
-
-            if (subscribedToUpdate) {
-                EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(), progressBarFill, assetsSearched ? "Finding Scene References..." : "Finding Asset References...");
-            }
-
-            DrawLayoutGroup(prefabReferences, "Prefabs" + (prefabReferences.Count <= 0 ? "" : ":"));
-            DrawLayoutGroup(scriptableObjectReferences, "Scriptable Objects" + (scriptableObjectReferences.Count <= 0 ? "" : ":"));
-            DrawLayoutGroup(sceneReferences, "Scene References" + (sceneReferences.Count <= 0 ? "" : ":"));
-
-            EditorGUILayout.EndScrollView();
-
-            if (toFindObjectsAfterLayout == null) {
-                return;
-            }
-
-            toFindObjects = toFindObjectsAfterLayout;
-            toFindObjectsAfterLayout = null;
-            FindObjectReferences();
-        }
-
-        private void DrawLayoutGroup<T>(IReadOnlyList<T> references, string footer) where T: Object
-        {
-            GUILayout.Space(5);
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label($" {references.Count} {footer}", EditorStyles.boldLabel);
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(5);
-
-            for (int i = references.Count - 1; i >= 0; --i)
-            {
-                DrawLayoutItem(i, references[i]);
-            }
-        }
-
-        private void DrawLayoutItem(int i, Object obj)
-        {
-            if (obj == null) {
-                return;
-            }
-
-            GUILayout.BeginHorizontal();
-            DrawLayoutObjectButton(obj);
-            GUILayout.EndHorizontal();
-        }
-
-        private void DrawLayoutObjectButton(Object obj)
-        {
-            GUIStyle style = EditorStyles.miniButtonLeft;
-            style.alignment = TextAnchor.MiddleLeft;
-
-            if (GUILayout.Button(obj.name, style))
-            {
-                Selection.activeObject = obj;
-                EditorGUIUtility.PingObject(obj);
-            }
-
-            if (!GUILayout.Button("\u25B6", EditorStyles.miniButtonRight, GUILayout.MaxWidth(20))) {
-                return;
-            }
-
-            var objs = new Object[1];
-            objs[0] = obj;
-            toFindObjectsAfterLayout = objs;
-        }
-    
-        #endregion
-
-        #region search
-    
-        private void FindObjectReferences()
-        {
-            outerSearchIndex = 0;
-            innerSearchIndex = 0;
-            assetsSearched = false;
-        
-            prefabReferences.Clear();
-            scriptableObjectReferences.Clear();
-            sceneReferences.Clear();
-        
-            sceneObjects = FindObjectsOfType(typeof(MonoBehaviour));
-            paths = new List<string>();
-            UpdateFilePaths("Assets", ref paths, ".prefab", ".asset");
-        
+            SetupSearch();
             FindObjectReferencesAsync();
+        }
+        
+        public void StopSearch()
+        {
+            if (asyncSearchSubscribed) {
+                UnsubscribeAsyncSearch();
+            }
         }
 
         private void FindObjectReferencesAsync()
         {
-            if (!subscribedToUpdate) {
+            if (!asyncSearchSubscribed) {
                 SubscribeAsyncSearch();
             }
         
@@ -190,13 +68,13 @@ namespace Plugins.ScriptableVariables.Editor {
             }
 
             if (!completed) {
-                Repaint();
+                repaint?.Invoke();
                 return;
             }
         
             EditorUtility.ClearProgressBar();
             UnsubscribeAsyncSearch();
-            Repaint();
+            repaint?.Invoke();
         }
 
         private void SearchReferencingAssets(out bool completed)
@@ -204,14 +82,14 @@ namespace Plugins.ScriptableVariables.Editor {
             while (outerSearchIndex < paths.Count) {
                 Object asset = AssetDatabase.LoadMainAssetAtPath(paths[outerSearchIndex]);
             
-                while (innerSearchIndex < toFindObjects.Length) {
-                    ParseAsset(asset, toFindObjects[innerSearchIndex]);
+                while (innerSearchIndex < ToFindObjects.Length) {
+                    ParseAsset(asset, ToFindObjects[innerSearchIndex]);
                     innerSearchIndex++;
                 }
 
                 innerSearchIndex = 0;
                 outerSearchIndex++;
-                progressBarFill = (float) outerSearchIndex / paths.Count / 2;
+                SearchProgress = (float) outerSearchIndex / paths.Count / 2;
 
                 if (FrameTimeElapsed()) {
                     completed = false;
@@ -227,9 +105,9 @@ namespace Plugins.ScriptableVariables.Editor {
         private void SearchReferencingMonoBehaviours(out bool completed)
         {
             while (outerSearchIndex < sceneObjects.Length) {
-                while (innerSearchIndex < toFindObjects.Length) {
-                    if (sceneObjects[outerSearchIndex] != null && sceneObjects[outerSearchIndex] != toFindObjects[innerSearchIndex]) {
-                        ParseSceneObject(sceneObjects[outerSearchIndex], toFindObjects[innerSearchIndex]);
+                while (innerSearchIndex < ToFindObjects.Length) {
+                    if (sceneObjects[outerSearchIndex] != null && sceneObjects[outerSearchIndex] != ToFindObjects[innerSearchIndex]) {
+                        ParseSceneObject(sceneObjects[outerSearchIndex], ToFindObjects[innerSearchIndex]);
                     }
 
                     innerSearchIndex++;
@@ -237,7 +115,7 @@ namespace Plugins.ScriptableVariables.Editor {
             
                 innerSearchIndex = 0;
                 outerSearchIndex++;
-                progressBarFill = 0.5f + (float) outerSearchIndex / sceneObjects.Length / 2;
+                SearchProgress = 0.5f + (float) outerSearchIndex / sceneObjects.Length / 2;
 
                 if (FrameTimeElapsed()) {
                     completed = false;
@@ -251,6 +129,10 @@ namespace Plugins.ScriptableVariables.Editor {
 
         private bool FrameTimeElapsed()
         {
+            for (int i = 0; i < 200; i++) {
+                Debug.Log("LAG");
+            }
+            
             if (stopwatch.Elapsed.TotalSeconds <= FrameTime) {
                 return false;
             }
@@ -293,18 +175,18 @@ namespace Plugins.ScriptableVariables.Editor {
         {
             switch (asset) {
                 case GameObject gameObject:
-                    if (!prefabReferences.Contains(gameObject)) {
-                        prefabReferences.Add(gameObject);
+                    if (!PrefabReferences.Contains(gameObject)) {
+                        PrefabReferences.Add(gameObject);
                     }
                     break;
                 case ScriptableObject scriptableObject:
-                    if (!scriptableObjectReferences.Contains(scriptableObject)) {
-                        scriptableObjectReferences.Add(scriptableObject);
+                    if (!ScriptableObjectReferences.Contains(scriptableObject)) {
+                        ScriptableObjectReferences.Add(scriptableObject);
                     }
                     break;
                 case MonoBehaviour monoBehaviour:
-                    if (!sceneReferences.Contains(monoBehaviour)) {
-                        sceneReferences.Add(monoBehaviour);
+                    if (!SceneReferences.Contains(monoBehaviour)) {
+                        SceneReferences.Add(monoBehaviour);
                     }
                     break;
                 default:
@@ -325,7 +207,7 @@ namespace Plugins.ScriptableVariables.Editor {
                     UpdateFilePaths(directory, ref paths, extensions);
                 }
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
                 Debug.LogError(e.Message);
             }
@@ -334,15 +216,28 @@ namespace Plugins.ScriptableVariables.Editor {
         private void SubscribeAsyncSearch()
         {
             EditorApplication.update += FindObjectReferencesAsync;
-            subscribedToUpdate = true;
+            asyncSearchSubscribed = true;
         }
 
         private void UnsubscribeAsyncSearch()
         {
             EditorApplication.update -= FindObjectReferencesAsync;
-            subscribedToUpdate = false;
+            asyncSearchSubscribed = false;
         }
 
-        #endregion
+        private void SetupSearch()
+        {
+            outerSearchIndex = 0;
+            innerSearchIndex = 0;
+            assetsSearched = false;
+        
+            PrefabReferences = new List<GameObject>();
+            ScriptableObjectReferences = new List<ScriptableObject>();
+            SceneReferences = new List<MonoBehaviour>();
+            
+            sceneObjects = Object.FindObjectsOfType(typeof(MonoBehaviour));
+            paths = new List<string>();
+            UpdateFilePaths("Assets", ref paths, ".prefab", ".asset");
+        }
     }
 }
