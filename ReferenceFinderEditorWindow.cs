@@ -1,6 +1,8 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace Plugins.ScriptableVariables.Editor.Utils
 {
@@ -15,7 +17,6 @@ namespace Plugins.ScriptableVariables.Editor.Utils
         private List<ScriptableObject> ScriptableObjectReferences => referenceFinder.ScriptableObjectReferences;
         private List<MonoBehaviour> SceneReferences => referenceFinder.SceneReferences;
 
-        private bool subscribedToRepaint;
         
         [MenuItem("Assets/Find References", false, 39)]
         private static void FindSelectedAssetReferences()
@@ -38,6 +39,7 @@ namespace Plugins.ScriptableVariables.Editor.Utils
             window.position = new Rect(new Vector2(200, 200), new Vector2(300, 350));
             
             referenceFinder = new ReferenceFinder();
+            referenceFinder.repaint += window.Repaint;
             referenceFinder.FindObjectReferences(assets);
         }
 
@@ -47,15 +49,17 @@ namespace Plugins.ScriptableVariables.Editor.Utils
             window.position = new Rect(new Vector2(200, 200), new Vector2(300, 350));
             
             ReferenceFinderEditorWindow.referenceFinder = referenceFinder;
+            referenceFinder.repaint += window.Repaint;
+        }
+        
+        private void OnDestroy()
+        {
+            referenceFinder.repaint -= Repaint;
+            referenceFinder.TryStopSearch();
         }
 
         private void OnGUI()
         {
-            if (!subscribedToRepaint) {
-                referenceFinder.repaint += Repaint;
-                subscribedToRepaint = true;
-            }
-            
             GUILayout.Space(5);
             scrollViewPosition = EditorGUILayout.BeginScrollView(scrollViewPosition);
 
