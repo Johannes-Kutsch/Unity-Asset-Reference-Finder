@@ -128,11 +128,7 @@ namespace Plugins.ScriptableVariables.Editor.Utils {
         }
 
         private bool FrameTimeElapsed()
-        {
-            for (int i = 0; i < 200; i++) {
-                Debug.Log("LAG");
-            }
-            
+        {           
             if (stopwatch.Elapsed.TotalSeconds <= FrameTime) {
                 return false;
             }
