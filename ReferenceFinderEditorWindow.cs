@@ -41,6 +41,14 @@ namespace Plugins.ScriptableVariables.Editor.Utils
             referenceFinder.FindObjectReferences(assets);
         }
 
+        public static void OpenWindow(ReferenceFinder referenceFinder)
+        {
+            ReferenceFinderEditorWindow window = GetWindow<ReferenceFinderEditorWindow>(true, "Find References", true);
+            window.position = new Rect(new Vector2(200, 200), new Vector2(300, 350));
+            
+            ReferenceFinderEditorWindow.referenceFinder = referenceFinder;
+        }
+
         private void OnGUI()
         {
             if (!subscribedToRepaint) {
